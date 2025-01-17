@@ -6,4 +6,4 @@
 /build*/
 
 #sloppy credentials
-sloppy_credentials.conf
+sloppy_credentials.*
