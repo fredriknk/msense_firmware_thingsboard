@@ -10,6 +10,28 @@ config APP_VERSION
 	string "Multi Service Sample version"
 	default "1.0.0"
 
+config COAP_SAMPLE_RESOURCE
+    string "CoAP Resource Path"
+    default "api/v1/default"
+
+config COAP_SAMPLE_SERVER_HOSTNAME
+    string "CoAP Hostname"
+    default "default_hostname"
+
+config COAP_SAMPLE_SERVER_PORT
+    int "CoAP Port"
+    default 5683
+
+config COAP_SAMPLE_REQUEST_INTERVAL_SECONDS
+    int "CoAP Request Interval"
+    default 60
+
+config JSON_DIY_COAP
+	bool "Use JSON DIY CoAP"
+	default n
+	help
+	  Use JSON DIY CoAP cloud for telemetry instead of nrfcloud.
+
 config CLOUD_CONNECTION_RETRY_TIMEOUT_SECONDS
 	int "Cloud connection retry timeout (seconds)"
 	default 30

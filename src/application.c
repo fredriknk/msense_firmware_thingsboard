@@ -30,6 +30,11 @@
 #include "shadow_config.h"
 #include <zephyr/drivers/sensor.h>
 
+#include <zephyr/posix/arpa/inet.h>
+#include <zephyr/posix/netdb.h>
+#include <zephyr/posix/sys/socket.h>
+#include <zephyr/posix/poll.h>
+
 LOG_MODULE_REGISTER(application, CONFIG_MULTI_SERVICE_LOG_LEVEL);
 
 /* Timer used to time the sensor sampling rate. */
@@ -57,6 +62,11 @@ typedef struct {
 
 sensor_data_t sensor_buffer[MAX_BUFFER_SIZE];
 size_t buffer_index = 0;
+
+
+struct sockaddr_storage server = { 0 };
+struct coap_client coap_client = { 0 };
+int sock;
 
 void buffer_sensor_data(const char *sensor, double value) {
     if (buffer_index < MAX_BUFFER_SIZE) {
@@ -191,7 +201,181 @@ static int send_sensor_sample(const char *const sensor, double value)
 	/* Send the sensor sample container object as a device message. */
 	return send_device_message(&msg_obj);
 }
-#if defined(CONFIG_NRF_CLOUD_COAP)
+
+static void response_cb(int16_t code, size_t offset,
+                        const uint8_t *payload, size_t len,
+                        bool last_block, void *user_data)
+{	
+	LOG_INF("CoAP RESPONSE CALLBACK");
+    if (code >= 0) {
+        LOG_INF("CoAP response: code: 0x%x", code);
+
+        /* Only log payload if non-empty. */
+        if (len > 0 && payload != NULL) {
+            /* Log it as a string with explicit length to avoid reading beyond the buffer. */
+            LOG_INF("Payload (%u bytes): %.*s", (unsigned int)len, (int)len, payload);
+        } else {
+            LOG_INF("No payload in response");
+        }
+    } else {
+        LOG_INF("Response received with error code: %d", code);
+    }
+}
+
+
+static int server_resolve(struct sockaddr_storage *server)
+{
+	int err;
+	struct addrinfo *result;
+	struct addrinfo hints = {
+		.ai_family = AF_INET,
+		.ai_socktype = SOCK_DGRAM
+	};
+	char ipv4_addr[NET_IPV4_ADDR_LEN];
+
+	err = getaddrinfo(CONFIG_COAP_SAMPLE_SERVER_HOSTNAME, NULL, &hints, &result);
+	if (err) {
+		LOG_ERR("getaddrinfo, error: %d", err);
+		return err;
+	}
+
+	if (result == NULL) {
+		LOG_ERR("Address not found");
+		return -ENOENT;
+	}
+
+	/* IPv4 Address. */
+	struct sockaddr_in *server4 = ((struct sockaddr_in *)server);
+
+	server4->sin_addr.s_addr = ((struct sockaddr_in *)result->ai_addr)->sin_addr.s_addr;
+	server4->sin_family = AF_INET;
+	server4->sin_port = htons(CONFIG_COAP_SAMPLE_SERVER_PORT);
+
+	inet_ntop(AF_INET, &server4->sin_addr.s_addr, ipv4_addr, sizeof(ipv4_addr));
+
+	LOG_INF("IPv4 Address found %s", ipv4_addr);
+
+	/* Free the address. */
+	freeaddrinfo(result);
+
+	return 0;
+}
+
+static int encode_nrf_cloud_obj(struct nrf_cloud_obj *obj)
+{
+    if (!obj || obj->type != NRF_CLOUD_OBJ_TYPE_JSON || !obj->json) {
+        return -EINVAL;
+    }
+
+    /* cJSON_PrintUnformatted() returns a malloc’d string. 
+     * The user is responsible for free’ing it later.
+     */
+    char *json_str = cJSON_PrintUnformatted(obj->json);
+    if (!json_str) {
+        return -ENOMEM;
+    }
+
+    /* Populate the encoded_data fields. */
+    obj->encoded_data.ptr = json_str;
+    obj->encoded_data.len = strlen(json_str);
+    obj->enc_src = NRF_CLOUD_ENC_SRC_PRE_ENCODED;
+
+    return 0;
+}
+
+int send_device_message_localcoap(struct nrf_cloud_obj *const msg_obj){
+	int err;
+    if (!msg_obj) {
+        return -EINVAL;
+    }
+
+    /* 1) Ensure the object is encoded. If it’s not yet encoded, do it now. */
+    if (!msg_obj->encoded_data.ptr || msg_obj->encoded_data.len == 0) {
+        int err = encode_nrf_cloud_obj(msg_obj);
+        if (err) {
+            return err;
+        }
+    }
+
+    /* 2) Build the CoAP POST request structure. */
+    struct coap_client_request req = {
+        .method       = COAP_METHOD_POST,                 // POST
+        .confirmable  = true,
+        .fmt          = COAP_CONTENT_FORMAT_APP_JSON,     // content-format: JSON
+        .payload      = (const uint8_t *)msg_obj->encoded_data.ptr,
+        .len          = msg_obj->encoded_data.len,
+        .cb           = response_cb,   // your callback for the CoAP response
+        .path         = CONFIG_COAP_SAMPLE_RESOURCE, // e.g. "api/v1/<token>/telemetry"
+    };
+
+	/* Send POST request */
+	err = coap_client_req(&coap_client, sock, (struct sockaddr *)&server, &req, NULL);
+	if (err) {
+		LOG_ERR("Failed to send POST: %d", err);
+		return err;
+	}
+
+	LOG_INF("CoAP POST sent to %s, resource: %s, payload: %s",
+			CONFIG_COAP_SAMPLE_SERVER_HOSTNAME,
+			CONFIG_COAP_SAMPLE_RESOURCE,
+			msg_obj->encoded_data.ptr);
+	
+	return 0;
+}
+
+#if defined(CONFIG_JSON_DIY_COAP)
+void send_buffered_data() {
+    int ret;
+    NRF_CLOUD_OBJ_JSON_DEFINE(bulk_obj);
+    NRF_CLOUD_OBJ_JSON_DEFINE(msg_obj);
+	LOG_INF("Initializing bulk message");
+    ret = nrf_cloud_obj_bulk_init(&bulk_obj);
+    if (ret) {
+        LOG_ERR("Failed to initialize bulk message: %d", ret);
+        return;
+    }
+
+    for (size_t i = 0; i < buffer_index; i++) {
+        ret = create_timestamped_device_message_with_ts(&msg_obj,
+                                                        sensor_buffer[i].sensor_name,
+                                                        NRF_CLOUD_JSON_MSG_TYPE_VAL_DATA,
+                                                        sensor_buffer[i].timestamp);
+        if (ret) {
+            LOG_ERR("Failed to create message object: %d", ret);
+            continue;
+        }
+
+        ret = nrf_cloud_obj_num_add(&msg_obj, NRF_CLOUD_JSON_DATA_KEY, sensor_buffer[i].value, false);
+		LOG_INF("Add obj to bulk send: %f", sensor_buffer[i].value);
+        if (ret) {
+            LOG_ERR("Failed to add data to message object: %d", ret);
+            nrf_cloud_obj_free(&msg_obj);
+            continue;
+        }
+
+        ret = nrf_cloud_obj_bulk_add(&bulk_obj, &msg_obj);
+        if (ret) {
+            LOG_ERR("Failed to add message to bulk object: %d", ret);
+            nrf_cloud_obj_free(&msg_obj);
+            continue;
+        }
+        nrf_cloud_obj_reset(&msg_obj);
+    }
+	LOG_INF("Send bulk message");
+    ret = send_device_message_localcoap(&bulk_obj);
+	
+    if (ret) {
+        LOG_ERR("Failed to send bulk message: %d", ret);
+    } else {
+        // Clear the buffer after successful send
+        buffer_index = 0;
+    }
+
+    nrf_cloud_obj_free(&bulk_obj);
+}
+#endif
+
+#if defined(CONFIG_NRF_CLOUD_COAP) && !defined(CONFIG_JSON_DIY_COAP)
 void send_buffered_data() {
     int ret;
     NRF_CLOUD_OBJ_JSON_DEFINE(msg_obj);
@@ -560,8 +744,26 @@ void main_application_thread_fn(void)
 	(void)start_location_tracking(on_location_update,
 					CONFIG_LOCATION_TRACKING_SAMPLE_INTERVAL_SECONDS);
 #endif
+	int err;
+	/* Resolve hostname -> IP */
+    err = server_resolve(&server);
+    if (err) {
+        LOG_ERR("Failed to resolve server name");
+    }
+
+    sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    if (sock < 0) {
+        LOG_ERR("Failed to create CoAP socket: %d.", -errno);
+    }
+
+    LOG_INF("Initializing CoAP client new code");
+    err = coap_client_init(&coap_client, NULL);
+    if (err) {
+        LOG_ERR("Failed to initialize CoAP client: %d", err);
+    }
+
 	int counter = 0;
-	int sendcounter = 9999;
+	int sendcounter = 3;
 	/* Begin sampling sensors. */
 	while (true) {
 		/* Start the sensor sample interval timer.

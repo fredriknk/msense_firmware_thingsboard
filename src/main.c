@@ -87,6 +87,10 @@ int main(void)
 
 	LOG_INF("Charger Status: %d, Error: %d\n", status.val1, error.val1);
 #endif
+	LOG_INF("Resource: %s", CONFIG_COAP_SAMPLE_RESOURCE);
+    LOG_INF("Hostname: %s", CONFIG_COAP_SAMPLE_SERVER_HOSTNAME);
+    LOG_INF("Port: %d", CONFIG_COAP_SAMPLE_SERVER_PORT);
+    LOG_INF("Interval: %d", CONFIG_COAP_SAMPLE_REQUEST_INTERVAL_SECONDS);
 	const char *protocol;
 
 	if (IS_ENABLED(CONFIG_NRF_CLOUD_MQTT)) {

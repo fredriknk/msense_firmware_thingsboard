@@ -1,0 +1,20 @@
+cmake:
+  application:
+    source-dir: C:/ncs/v2.9.0/zephyr/share/sysbuild
+  board:
+    name: nrf9160dk
+    qualifiers: nrf9160/ns
+    revision: 0.14.0
+  kconfig:
+    files:
+     - C:/ncs/workspace_1/nrf_cloudMS290/NRFDKCOAP/_sysbuild/empty.conf
+     - C:/ncs/workspace_1/nrf_cloudMS290/NRFDKCOAP/_sysbuild/empty.conf
+     - c:/ncs/workspace_1/nrf_cloudMS290/sysbuild.conf
+    user-files:
+     - c:/ncs/workspace_1/nrf_cloudMS290/sysbuild.conf
+  sysbuild: true
+version: 0.1.0
+west:
+  command: C:\ncs\toolchains\b620d30767\opt\bin\Scripts\west build --build-dir c:/ncs/workspace_1/nrf_cloudMS290/NRFDKCOAP c:/ncs/workspace_1/nrf_cloudMS290 --pristine --board nrf9160dk/nrf9160/ns --sysbuild -- -DNCS_TOOLCHAIN_VERSION=NONE -DEXTRA_CONF_FILE=overlay_coap.conf;sloppy_credentials.conf -DBOARD_ROOT=c:\Users\fnk\Documents\GITHUB\nrfboards;c:\ncs\workspace_1\asset_tracker_v2_devkit;c:\ncs\workspace_1\nrf_cloudMS290;c:\ncs\workspace_1\aws_iot_2;c:\ncs\workspace_1\coap_client_1
+  topdir: c:\ncs\v2.9.0
+  version: 1.2.0
