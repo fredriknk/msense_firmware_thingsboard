@@ -1,0 +1,10 @@
+west:
+  command: C:\ncs\toolchains\b620d30767\opt\bin\Scripts\west build --build-dir c:/ncs/workspace_1/nrf_cloudMS290/NRF_DK_TEST/mcuboot
+    c:/ncs/v2.9.0/bootloader/mcuboot/boot/zephyr --pristine --board nrf9160dk@0.14.0/nrf9160
+    -- -DNCS_TOOLCHAIN_VERSION=NONE -DFORCED_CONF_FILE=C:/ncs/workspace_1/nrf_cloudMS290/NRF_DK_TEST/mcuboot/zephyr/.config.sysbuild
+    -DCONF_FILE=c:/ncs/workspace_1/nrf_cloudMS290/sysbuild/mcuboot/prj.conf;c:/ncs/workspace_1/nrf_cloudMS290/sysbuild/mcuboot/boards/nrf9160dk_nrf9160.conf
+    -DEXTRA_CONF_FILE=c:/ncs/v2.9.0/nrf/modules/mcuboot/tfm.conf;c:/ncs/v2.9.0/nrf/modules/mcuboot/fih_low_enable.conf
+    -DDTC_OVERLAY_FILE=c:/ncs/workspace_1/nrf_cloudMS290/sysbuild/mcuboot/boards/nrf9160dk_nrf9160_0_14_0.overlay
+    -DBOARD_ROOT=c:/users/fnk/documents/github/nrfboards;c:/ncs/workspace_1/asset_tracker_v2_devkit;c:/ncs/workspace_1/nrf_cloudms290;c:/ncs/workspace_1/aws_iot_2;c:/ncs/workspace_1/coap_client_1
+  topdir: c:\ncs\v2.9.0
+  version: 1.2.0

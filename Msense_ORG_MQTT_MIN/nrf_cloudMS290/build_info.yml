@@ -1,0 +1,58 @@
+cmake:
+  application:
+    configuration-dir: C:/ncs/workspace_1/nrf_cloudMS290
+    source-dir: C:/ncs/workspace_1/nrf_cloudMS290
+  board:
+    name: msensedk
+    qualifiers: nrf9160/ns
+    revision: 0.14.0
+  devicetree:
+    bindings-dirs:
+     - C:/ncs/v2.9.0/nrf/dts/bindings
+     - C:/Users/fnk/Documents/GITHUB/nrfboards/boards/arm/msensedk/dts/bindings
+     - C:/ncs/v2.9.0/zephyr/dts/bindings
+    files:
+     - C:/Users/fnk/Documents/GITHUB/nrfboards/boards/arm/msensedk/msensedk_nrf9160_ns.dts
+     - C:/Users/fnk/Documents/GITHUB/nrfboards/boards/arm/msensedk/msensedk_nrf9160_ns_0_14_0.overlay
+     - C:/ncs/workspace_1/nrf_cloudMS290/boards/msensedk_nrf9160_ns_0_14_0.overlay
+    include-dirs:
+     - C:/ncs/v2.9.0/nrf/include
+     - C:/ncs/v2.9.0/nrf/dts
+     - C:/Users/fnk/Documents/GITHUB/nrfboards/boards/arm/msensedk/dts
+     - C:/ncs/v2.9.0/zephyr/include
+     - C:/ncs/v2.9.0/zephyr/include/zephyr
+     - C:/ncs/v2.9.0/zephyr/dts/common
+     - C:/ncs/v2.9.0/zephyr/dts/x86
+     - C:/ncs/v2.9.0/zephyr/dts/xtensa
+     - C:/ncs/v2.9.0/zephyr/dts/sparc
+     - C:/ncs/v2.9.0/zephyr/dts/riscv
+     - C:/ncs/v2.9.0/zephyr/dts/posix
+     - C:/ncs/v2.9.0/zephyr/dts/nios2
+     - C:/ncs/v2.9.0/zephyr/dts/arm64
+     - C:/ncs/v2.9.0/zephyr/dts/arm
+     - C:/ncs/v2.9.0/zephyr/dts/arc
+     - C:/ncs/v2.9.0/zephyr/dts
+    user-files:
+     - C:/ncs/workspace_1/nrf_cloudMS290/boards/msensedk_nrf9160_ns_0_14_0.overlay
+  kconfig:
+    extra-user-files:
+     - overlay_msense_min_mqtt.conf
+    files:
+     - C:/Users/fnk/Documents/GITHUB/nrfboards/boards/arm/msensedk/msensedk_nrf9160_ns_defconfig
+     - C:/ncs/workspace_1/nrf_cloudMS290/prj.conf
+     - C:/ncs/workspace_1/nrf_cloudMS290/boards/msensedk_nrf9160_ns.conf
+     - C:/ncs/workspace_1/nrf_cloudMS290/overlay_msense_min_mqtt.conf
+     - C:/ncs/workspace_1/nrf_cloudMS290/Msense_ORG_MQTT_MIN/nrf_cloudMS290/zephyr/.config.sysbuild
+    user-files:
+     - C:/ncs/workspace_1/nrf_cloudMS290/prj.conf
+     - C:/ncs/workspace_1/nrf_cloudMS290/boards/msensedk_nrf9160_ns.conf
+  toolchain:
+    name: zephyr
+    path: C:/ncs/toolchains/b620d30767/opt/zephyr-sdk
+  vendor-specific:
+    nordic:
+      svdfile: C:/ncs/v2.9.0/modules/hal/nordic/nrfx/mdk/nrf9160.svd
+  zephyr:
+    version: 3.7.99
+    zephyr-base: C:/ncs/v2.9.0/zephyr
+version: 0.1.0

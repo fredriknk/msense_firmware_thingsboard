@@ -1,0 +1,2 @@
+# Load Zephyr board defconfig descriptions.
+osource "C:/Users/fnk/Documents/GITHUB/nrfboards/boards/arm/msensedk/Kconfig.defconfig"
