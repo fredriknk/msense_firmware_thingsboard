@@ -261,35 +261,187 @@ static int server_resolve(struct sockaddr_storage *server)
 	return 0;
 }
 
+struct reading_item {
+    const char *appId;
+    double data;
+    long long ts;
+};
+
+struct group {
+    long long earliest_ts;
+    cJSON *values; // JSON object holding { "appId": data, ... }
+};
+
+/* 
+ * Convert and group the original JSON array into 
+ * [ { "ts": X, "values": { "ID1": val1, "ID2": val2, ... } }, ... ]
+ * where all readings within 1 second of the earliest reading get grouped.
+ */
+static cJSON *build_thingsboard_telemetry_array_one_second_group(const cJSON *original_array)
+{
+    if (!cJSON_IsArray(original_array)) {
+        LOG_ERR("Input is not a JSON array");
+        return NULL;
+    }
+
+    int count = cJSON_GetArraySize(original_array);
+    if (count <= 0) {
+        LOG_WRN("Empty JSON array");
+        return cJSON_CreateArray(); // Return empty array
+    }
+
+    /* Allocate array for the raw readings */
+    struct reading_item *items = k_calloc(count, sizeof(struct reading_item));
+    if (!items) {
+        LOG_ERR("Failed to allocate memory for reading items");
+        return NULL;
+    }
+
+    /* Extract items from JSON into the array */
+    int idx = 0;
+    cJSON *elem = NULL;
+    cJSON_ArrayForEach(elem, original_array) {
+        if (idx >= count) {
+            break;
+        }
+
+        cJSON *appId_obj = cJSON_GetObjectItem(elem, "appId");
+        cJSON *ts_obj    = cJSON_GetObjectItem(elem, "ts");
+        cJSON *data_obj  = cJSON_GetObjectItem(elem, "data");
+        if (cJSON_IsString(appId_obj) && cJSON_IsNumber(ts_obj) && cJSON_IsNumber(data_obj)) {
+            items[idx].appId = appId_obj->valuestring;
+            items[idx].ts    = (long long)ts_obj->valuedouble;
+            items[idx].data  = data_obj->valuedouble;
+            idx++;
+        }
+    }
+    int valid_count = idx;
+
+    /* Sort the items by timestamp ascending using qsort */
+    int cmp_func(const void *a, const void *b) {
+        const struct reading_item *ra = (const struct reading_item *)a;
+        const struct reading_item *rb = (const struct reading_item *)b;
+        if (ra->ts < rb->ts) return -1;
+        if (ra->ts > rb->ts) return  1;
+        return 0;
+    }
+    qsort(items, valid_count, sizeof(struct reading_item), cmp_func);
+
+    /* Allocate groups (worst case: each reading is its own group) */
+    struct group *groups = k_calloc(valid_count, sizeof(struct group));
+    if (!groups) {
+        LOG_ERR("Failed to allocate memory for groups");
+        k_free(items);
+        return NULL;
+    }
+
+    int group_index = 0;
+    if (valid_count > 0) {
+        // Start first group with the first reading
+        groups[0].earliest_ts = items[0].ts;
+        groups[0].values = cJSON_CreateObject();
+        cJSON_AddNumberToObject(groups[0].values, items[0].appId, items[0].data);
+        group_index = 1;
+    }
+
+    // Group subsequent readings
+    for (int i = 1; i < valid_count; i++) {
+        long long current_ts = items[i].ts;
+        struct group *last_grp = &groups[group_index - 1];
+
+        if ((current_ts - last_grp->earliest_ts) < 1000) {
+            // Same group
+            cJSON_AddNumberToObject(last_grp->values, items[i].appId, items[i].data);
+        } else {
+            // New group
+            groups[group_index].earliest_ts = current_ts;
+            groups[group_index].values = cJSON_CreateObject();
+            cJSON_AddNumberToObject(groups[group_index].values, items[i].appId, items[i].data);
+            group_index++;
+        }
+    }
+
+    // Build final JSON array
+    cJSON *tb_array = cJSON_CreateArray();
+    if (!tb_array) {
+        LOG_ERR("Failed to create TB array JSON");
+        // Cleanup
+        for (int g = 0; g < group_index; g++) {
+            cJSON_Delete(groups[g].values);
+        }
+        k_free(groups);
+        k_free(items);
+        return NULL;
+    }
+
+    // Convert each group into { "ts": X, "values": {...} }
+    for (int g = 0; g < group_index; g++) {
+        cJSON *group_obj = cJSON_CreateObject();
+        if (!group_obj) {
+            LOG_ERR("Failed to create group object");
+            cJSON_Delete(tb_array);
+            // Cleanup
+            for (int h = 0; h < group_index; h++) {
+                cJSON_Delete(groups[h].values);
+            }
+            k_free(groups);
+            k_free(items);
+            return NULL;
+        }
+
+        cJSON_AddNumberToObject(group_obj, "ts", (double)groups[g].earliest_ts);
+        cJSON_AddItemToObject(group_obj, "values", groups[g].values);
+        cJSON_AddItemToArray(tb_array, group_obj);
+    }
+
+    // Cleanup
+    k_free(groups);
+    k_free(items);
+
+    return tb_array;
+}
+
+#define NRF_CLOUD_ENC_SRC_PRE_ENCODED 1
+
 static int encode_nrf_cloud_obj(struct nrf_cloud_obj *obj)
 {
     if (!obj || obj->type != NRF_CLOUD_OBJ_TYPE_JSON || !obj->json) {
+        LOG_ERR("Invalid object or JSON");
         return -EINVAL;
     }
 
-    /* cJSON_PrintUnformatted() returns a malloc’d string. 
-     * The user is responsible for free’ing it later.
-     */
-    char *json_str = cJSON_PrintUnformatted(obj->json);
-    if (!json_str) {
+    /* Convert + group readings into TB-friendly array */
+    cJSON *tb_array = build_thingsboard_telemetry_array_one_second_group(obj->json);
+    if (!tb_array) {
+        LOG_ERR("Failed to build TB telemetry array");
         return -ENOMEM;
     }
 
-    /* Populate the encoded_data fields. */
+    /* Print the new array as unformatted JSON */
+    char *json_str = cJSON_PrintUnformatted(tb_array);
+    cJSON_Delete(tb_array);  // free the cJSON structure
+
+    if (!json_str) {
+        LOG_ERR("Failed to stringify TB array");
+        return -ENOMEM;
+    }
+
+    /* Populate the encoded_data fields. Use k_malloc if you want Zephyr memory tracking. */
     obj->encoded_data.ptr = json_str;
     obj->encoded_data.len = strlen(json_str);
     obj->enc_src = NRF_CLOUD_ENC_SRC_PRE_ENCODED;
 
+    LOG_INF("Encoded grouped TB JSON: %s", json_str);
     return 0;
 }
 
-int send_device_message_localcoap(struct nrf_cloud_obj *const msg_obj){
-	int err;
+int send_device_message_localcoap(struct nrf_cloud_obj *const msg_obj)
+{
     if (!msg_obj) {
         return -EINVAL;
     }
 
-    /* 1) Ensure the object is encoded. If it’s not yet encoded, do it now. */
+    /* Ensure the object is encoded */
     if (!msg_obj->encoded_data.ptr || msg_obj->encoded_data.len == 0) {
         int err = encode_nrf_cloud_obj(msg_obj);
         if (err) {
@@ -297,30 +449,27 @@ int send_device_message_localcoap(struct nrf_cloud_obj *const msg_obj){
         }
     }
 
-    /* 2) Build the CoAP POST request structure. */
     struct coap_client_request req = {
-        .method       = COAP_METHOD_POST,                 // POST
+        .method       = COAP_METHOD_POST,
         .confirmable  = true,
-        .fmt          = COAP_CONTENT_FORMAT_APP_JSON,     // content-format: JSON
+        .fmt          = COAP_CONTENT_FORMAT_APP_JSON, // sending JSON
         .payload      = (const uint8_t *)msg_obj->encoded_data.ptr,
         .len          = msg_obj->encoded_data.len,
-        .cb           = response_cb,   // your callback for the CoAP response
-        .path         = CONFIG_COAP_SAMPLE_RESOURCE, // e.g. "api/v1/<token>/telemetry"
+        .cb           = response_cb, // your CoAP response callback
+        .path         = CONFIG_COAP_SAMPLE_RESOURCE, // "api/v1/<token>/telemetry"
     };
 
-	/* Send POST request */
-	err = coap_client_req(&coap_client, sock, (struct sockaddr *)&server, &req, NULL);
-	if (err) {
-		LOG_ERR("Failed to send POST: %d", err);
-		return err;
-	}
+    int err = coap_client_req(&coap_client, sock,
+                              (struct sockaddr *)&server, &req, NULL);
+    if (err) {
+        LOG_ERR("Failed to send POST: %d", err);
+        return err;
+    }
 
-	LOG_INF("CoAP POST sent to %s, resource: %s, payload: %s",
-			CONFIG_COAP_SAMPLE_SERVER_HOSTNAME,
-			CONFIG_COAP_SAMPLE_RESOURCE,
-			msg_obj->encoded_data.ptr);
-	
-	return 0;
+    LOG_INF("CoAP POST sent. Payload: %s",
+            (char *)msg_obj->encoded_data.ptr);
+
+    return 0;
 }
 
 #if defined(CONFIG_JSON_DIY_COAP)
@@ -534,6 +683,11 @@ static void on_location_update(const struct location_event_data * const location
 		location_data->location.longitude,
 		(double)location_data->location.accuracy,
 		location_method_str(location_data->method));
+
+	buffer_sensor_data("LAT", location_data->location.latitude);
+	buffer_sensor_data("LON", location_data->location.longitude);
+	buffer_sensor_data("ACC", location_data->location.accuracy);
+	buffer_sensor_data("MET", location_data->method);
 
 	/* If the position update was derived using GNSS, send it onward to nRF Cloud. */
 	if (location_data->method == LOCATION_METHOD_GNSS) {
@@ -789,14 +943,14 @@ void main_application_thread_fn(void)
 			double voltage = -1;
 
 			if (get_all_data(&temp, &humidity, &pressure, &gas)== 0) {
-				buffer_sensor_data(NRF_CLOUD_JSON_APPID_VAL_TEMP, temp);
+				buffer_sensor_data("T", temp);
 				monitor_temperature(temp);
 				LOG_INF("Temperature is %f degrees C", temp);
-				buffer_sensor_data(NRF_CLOUD_JSON_APPID_VAL_AIR_QUAL, gas);
+				buffer_sensor_data("O", gas);
 				LOG_INF("Gas Resistance is %d OHM", (int)gas);
-				buffer_sensor_data(NRF_CLOUD_JSON_APPID_VAL_AIR_PRESS, pressure);
+				buffer_sensor_data("P", pressure);
 				LOG_INF("pressure is %f pascal", pressure);
-				buffer_sensor_data(NRF_CLOUD_JSON_APPID_VAL_HUMID, humidity);
+				buffer_sensor_data("H", humidity);
 				LOG_INF("Humidity is %f %%", humidity);
 			}
 			else{
@@ -805,7 +959,7 @@ void main_application_thread_fn(void)
 
 			if (++sendcounter > NUM_SAMPLES) {
 				if(get_voltage(&voltage) == 0){
-					buffer_sensor_data("VBATT", voltage);
+					buffer_sensor_data("VBT", voltage);
 					LOG_INF("Voltage is %f V", voltage);
 				}
 				else{
