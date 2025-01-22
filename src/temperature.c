@@ -149,8 +149,8 @@ int get_temperature(double *temp)
 int get_all_data(double *temp_variable, double *hum_variable, double *pressure_variable,double *gas_variable )
 {
 	*temp_variable = 22.0 + (sys_rand32_get() % 100) / 40.0;
-	*hum_variable = 50.0 + (sys_rand32_get() % 100) / 40.0;
-	*pressure_variable = 1000.0 + (sys_rand32_get() % 100) / 40.0;
+	*hum_variable = 30.0 + (sys_rand32_get() % 100) / 40.0;
+	*pressure_variable = 100.0 + (sys_rand32_get() % 100) / 40.0;
 	*gas_variable = 70000.0 + (sys_rand32_get() % 100) / 40.0;
 	return 0;
 }

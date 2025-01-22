@@ -19,3 +19,6 @@
 	//npm1300@6b {};
 	/*ads1115@48 {};*/
 };
+&npm1300_ek_charger {
+	vbatlow-charge-enable;
+};

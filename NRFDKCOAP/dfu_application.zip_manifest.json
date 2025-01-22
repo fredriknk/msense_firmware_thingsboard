@@ -1,6 +1,6 @@
 {
     "format-version": 1,
-    "time": 1737462264,
+    "time": 1737550501,
     "files": [
         {
             "type": "application",
@@ -11,9 +11,9 @@
             "slot_index_primary": "1",
             "slot_index_secondary": "2",
             "version_MCUBOOT": "0.0.0+0",
-            "size": 293619,
+            "size": 294084,
             "file": "nrf_cloudMS290.signed.bin",
-            "modtime": 1737462263
+            "modtime": 1737550500
         }
     ],
     "name": "nrf_cloudMS290"

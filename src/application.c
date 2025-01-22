@@ -34,6 +34,9 @@
 #include <zephyr/posix/netdb.h>
 #include <zephyr/posix/sys/socket.h>
 #include <zephyr/posix/poll.h>
+#include <nrf_modem_at.h>
+
+#define IMEI_LEN 15
 
 LOG_MODULE_REGISTER(application, CONFIG_MULTI_SERVICE_LOG_LEVEL);
 
@@ -53,6 +56,11 @@ BUILD_ASSERT(CONFIG_AT_CMD_REQUEST_RESPONSE_BUFFER_LENGTH >= AT_CMD_REQUEST_ERR_
 
 #define MAX_BUFFER_SIZE 100  // Define a maximum buffer size based on available memory
 #define NUM_SAMPLES 4
+
+#define IMEI_LEN 15
+#define AT_RESP_LEN 64
+
+static char device_id_str[IMEI_LEN + 5]; // "nrf-" + 15 digits + null terminator
 
 typedef struct {
     char sensor_name[32];
@@ -277,7 +285,8 @@ struct group {
  * [ { "ts": X, "values": { "ID1": val1, "ID2": val2, ... } }, ... ]
  * where all readings within 1 second of the earliest reading get grouped.
  */
-static cJSON *build_thingsboard_telemetry_array_one_second_group(const cJSON *original_array)
+static cJSON *build_thingsboard_telemetry_array_one_second_group(const cJSON *original_array,
+                                                                 const char *device_id)
 {
     if (!cJSON_IsArray(original_array)) {
         LOG_ERR("Input is not a JSON array");
@@ -287,7 +296,11 @@ static cJSON *build_thingsboard_telemetry_array_one_second_group(const cJSON *or
     int count = cJSON_GetArraySize(original_array);
     if (count <= 0) {
         LOG_WRN("Empty JSON array");
-        return cJSON_CreateArray(); // Return empty array
+        // Return an empty top-level object with just the device_id
+        cJSON *top_obj = cJSON_CreateObject();
+        cJSON_AddStringToObject(top_obj, "device_id", device_id);
+        cJSON_AddItemToObject(top_obj, "data", cJSON_CreateArray());
+        return top_obj;
     }
 
     /* Allocate array for the raw readings */
@@ -317,7 +330,7 @@ static cJSON *build_thingsboard_telemetry_array_one_second_group(const cJSON *or
     }
     int valid_count = idx;
 
-    /* Sort the items by timestamp ascending using qsort */
+    // Sort the items by timestamp ascending
     int cmp_func(const void *a, const void *b) {
         const struct reading_item *ra = (const struct reading_item *)a;
         const struct reading_item *rb = (const struct reading_item *)b;
@@ -327,7 +340,7 @@ static cJSON *build_thingsboard_telemetry_array_one_second_group(const cJSON *or
     }
     qsort(items, valid_count, sizeof(struct reading_item), cmp_func);
 
-    /* Allocate groups (worst case: each reading is its own group) */
+    // Allocate groups (worst case: each reading is its own group)
     struct group *groups = k_calloc(valid_count, sizeof(struct group));
     if (!groups) {
         LOG_ERR("Failed to allocate memory for groups");
@@ -361,7 +374,7 @@ static cJSON *build_thingsboard_telemetry_array_one_second_group(const cJSON *or
         }
     }
 
-    // Build final JSON array
+    // Build final JSON array of groups
     cJSON *tb_array = cJSON_CreateArray();
     if (!tb_array) {
         LOG_ERR("Failed to create TB array JSON");
@@ -394,12 +407,24 @@ static cJSON *build_thingsboard_telemetry_array_one_second_group(const cJSON *or
         cJSON_AddItemToArray(tb_array, group_obj);
     }
 
-    // Cleanup
+    // Cleanup intermediate data
     k_free(groups);
     k_free(items);
 
-    return tb_array;
+    // ===== Now wrap tb_array in a top-level object with the device ID =====
+    cJSON *top_obj = cJSON_CreateObject();
+    if (!top_obj) {
+        LOG_ERR("Failed to create top-level JSON object");
+        cJSON_Delete(tb_array);
+        return NULL;
+    }
+
+    cJSON_AddStringToObject(top_obj, "device_id", device_id);
+    cJSON_AddItemToObject(top_obj, "data", tb_array);
+
+    return top_obj;
 }
+
 
 #define NRF_CLOUD_ENC_SRC_PRE_ENCODED 1
 
@@ -411,7 +436,7 @@ static int encode_nrf_cloud_obj(struct nrf_cloud_obj *obj)
     }
 
     /* Convert + group readings into TB-friendly array */
-    cJSON *tb_array = build_thingsboard_telemetry_array_one_second_group(obj->json);
+    cJSON *tb_array = build_thingsboard_telemetry_array_one_second_group(obj->json,device_id_str);
     if (!tb_array) {
         LOG_ERR("Failed to build TB telemetry array");
         return -ENOMEM;
@@ -515,10 +540,10 @@ void send_buffered_data() {
 	
     if (ret) {
         LOG_ERR("Failed to send bulk message: %d", ret);
-    } else {
-        // Clear the buffer after successful send
-        buffer_index = 0;
     }
+    // Clear the buffer
+    buffer_index = 0;
+    
 
     nrf_cloud_obj_free(&bulk_obj);
 }
@@ -849,6 +874,43 @@ static void report_startup(void)
 	}
 }
 
+int fetch_device_id(void)
+{
+    char at_resp[AT_RESP_LEN] = {0};
+    int err = nrf_modem_at_cmd(
+        at_resp,
+        sizeof(at_resp),
+        "AT+CGSN=1"
+    );
+
+    if (err) {
+        LOG_ERR("Failed to read IMEI (err %d)", err);
+        return err;
+    }
+
+    /* Typical response might look like:
+     *   +CGSN: "351901936599939"
+     * So we need to find the quoted IMEI substring.
+     */
+    char *start = strchr(at_resp, '"');  // find the first quote
+    if (!start) {
+        LOG_ERR("Could not find starting quote in CGSN response: %s", at_resp);
+        return -EINVAL;
+    }
+    start++; // move past the first quote
+
+    // Copy up to 15 digits (IMEI is always 15 digits), or until next quote/end
+    char imei_buf[IMEI_LEN + 1] = {0};
+    memcpy(imei_buf, start, IMEI_LEN);
+    imei_buf[IMEI_LEN] = '\0'; // null-terminate
+
+    /* If you want a prefix like "nrf-", prepend it: */
+    snprintf(device_id_str, sizeof(device_id_str), "nrf-%s", imei_buf);
+
+    LOG_INF("DEVICEID: %s", device_id_str);
+    return 0;
+}
+
 void main_application_thread_fn(void)
 {
 	print_reset_reason();
@@ -915,7 +977,7 @@ void main_application_thread_fn(void)
     if (err) {
         LOG_ERR("Failed to initialize CoAP client: %d", err);
     }
-
+    fetch_device_id();
 	int counter = 0;
 	int sendcounter = 3;
 	/* Begin sampling sensors. */
@@ -956,7 +1018,7 @@ void main_application_thread_fn(void)
 			else{
 				LOG_ERR("Failed to get sensor data");
 			}
-
+            
 			if (++sendcounter > NUM_SAMPLES) {
 				if(get_voltage(&voltage) == 0){
 					buffer_sensor_data("VBT", voltage);
@@ -965,7 +1027,6 @@ void main_application_thread_fn(void)
 				else{
 					LOG_ERR("Failed to get voltage data");
 				}
-
 
 				LOG_INF("Sending data %d datapoints", (int)buffer_index);
             	send_buffered_data();

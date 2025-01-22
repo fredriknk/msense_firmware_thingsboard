@@ -1,0 +1,43 @@
+{
+	"sources" : 
+	[
+		{
+			"file" : "C:/ncs/workspace_1/nrf_cloudMS290/MSENSE_DEV/_sysbuild/sysbuild/images/CMakeFiles/nrf_cloudMS290"
+		},
+		{
+			"file" : "C:/ncs/workspace_1/nrf_cloudMS290/MSENSE_DEV/_sysbuild/sysbuild/images/CMakeFiles/nrf_cloudMS290.rule"
+		},
+		{
+			"file" : "C:/ncs/workspace_1/nrf_cloudMS290/MSENSE_DEV/_sysbuild/sysbuild/images/CMakeFiles/nrf_cloudMS290-complete.rule"
+		},
+		{
+			"file" : "C:/ncs/workspace_1/nrf_cloudMS290/MSENSE_DEV/_sysbuild/sysbuild/images/nrf_cloudMS290-prefix/src/nrf_cloudMS290-stamp/nrf_cloudMS290-build.rule"
+		},
+		{
+			"file" : "C:/ncs/workspace_1/nrf_cloudMS290/MSENSE_DEV/_sysbuild/sysbuild/images/nrf_cloudMS290-prefix/src/nrf_cloudMS290-stamp/nrf_cloudMS290-configure.rule"
+		},
+		{
+			"file" : "C:/ncs/workspace_1/nrf_cloudMS290/MSENSE_DEV/_sysbuild/sysbuild/images/nrf_cloudMS290-prefix/src/nrf_cloudMS290-stamp/nrf_cloudMS290-download.rule"
+		},
+		{
+			"file" : "C:/ncs/workspace_1/nrf_cloudMS290/MSENSE_DEV/_sysbuild/sysbuild/images/nrf_cloudMS290-prefix/src/nrf_cloudMS290-stamp/nrf_cloudMS290-install.rule"
+		},
+		{
+			"file" : "C:/ncs/workspace_1/nrf_cloudMS290/MSENSE_DEV/_sysbuild/sysbuild/images/nrf_cloudMS290-prefix/src/nrf_cloudMS290-stamp/nrf_cloudMS290-mkdir.rule"
+		},
+		{
+			"file" : "C:/ncs/workspace_1/nrf_cloudMS290/MSENSE_DEV/_sysbuild/sysbuild/images/nrf_cloudMS290-prefix/src/nrf_cloudMS290-stamp/nrf_cloudMS290-patch.rule"
+		},
+		{
+			"file" : "C:/ncs/workspace_1/nrf_cloudMS290/MSENSE_DEV/_sysbuild/sysbuild/images/nrf_cloudMS290-prefix/src/nrf_cloudMS290-stamp/nrf_cloudMS290-update.rule"
+		}
+	],
+	"target" : 
+	{
+		"labels" : 
+		[
+			"nrf_cloudMS290"
+		],
+		"name" : "nrf_cloudMS290"
+	}
+}

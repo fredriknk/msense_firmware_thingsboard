@@ -1,9 +1,0 @@
-default: nrf_cloudMS290
-build_dir: C:/ncs/workspace_1/nrf_cloudMS290/Msense_ORG_MQTT_MIN
-domains:
-  - name: nrf_cloudMS290
-    build_dir: C:/ncs/workspace_1/nrf_cloudMS290/Msense_ORG_MQTT_MIN/nrf_cloudMS290
-  - name: mcuboot
-    build_dir: C:/ncs/workspace_1/nrf_cloudMS290/Msense_ORG_MQTT_MIN/mcuboot
-flash_order:
-  - nrf_cloudMS290

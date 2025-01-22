@@ -1,5 +1,5 @@
 /* Copyright (c) 2023 Nordic Semiconductor ASA
- *
+ *DEVICE_DT_GET(DT_NODELABEL(npm1300_ek_charger));
  * SPDX-License-Identifier: LicenseRef-Nordic-5-Clause
  */
 
@@ -12,6 +12,22 @@
 #include "led_control.h"
 #include "fota_support_coap.h"
 #include "shadow_support_coap.h"
+
+#if defined(CONFIG_TEMP_DATA_USE_SENSOR)
+
+	#include <zephyr/drivers/i2c.h>
+	#include <zephyr/drivers/regulator.h>
+	#include <zephyr/drivers/sensor/npm1300_charger.h>
+	#include <zephyr/dt-bindings/regulator/npm1300.h>
+	#include <zephyr/dt-bindings/regulator/npm1300.h>
+
+	static const struct device* buck1 = DEVICE_DT_GET(DT_NODELABEL(npm1300_ek_buck1));
+	static const struct device* buck2 = DEVICE_DT_GET(DT_NODELABEL(npm1300_ek_buck2));
+	static const struct device* ldo1 = DEVICE_DT_GET(DT_NODELABEL(npm1300_ek_ldo1));
+	static const struct device* ldo2 = DEVICE_DT_GET(DT_NODELABEL(npm1300_ek_ldo2));
+	static const struct device* charger = DEVICE_DT_GET(DT_NODELABEL(npm1300_ek_charger));
+
+#endif
 
 LOG_MODULE_REGISTER(main, CONFIG_MULTI_SERVICE_LOG_LEVEL);
 
@@ -66,7 +82,7 @@ int main(void)
 	}
 
 	if (!device_is_ready(charger)) {
-		printk("Charger device not ready.\n");
+		LOG_ERR("Charger device not ready.\n");
 		return 0;
 	}
 
@@ -77,6 +93,18 @@ int main(void)
 
 	regulator_set_voltage(buck2, 1800000, 1800000);
 
+	struct sensor_value volt;
+	struct sensor_value current;
+	struct sensor_value temp;
+	struct sensor_value error;
+	struct sensor_value status;
+
+	sensor_sample_fetch(charger);
+	sensor_channel_get(charger, SENSOR_CHAN_GAUGE_VOLTAGE, &volt);
+	sensor_channel_get(charger, SENSOR_CHAN_GAUGE_AVG_CURRENT, &current);
+	sensor_channel_get(charger, SENSOR_CHAN_GAUGE_TEMP, &temp);
+	sensor_channel_get(charger, SENSOR_CHAN_NPM1300_CHARGER_STATUS, &status);
+	sensor_channel_get(charger, SENSOR_CHAN_NPM1300_CHARGER_ERROR, &error);
 
 	LOG_INF("V: %d.%03d ", volt.val1, volt.val2 / 1000);
 
