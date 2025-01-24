@@ -4,6 +4,8 @@
 
 # build
 /build*/
-
+/MSENSE_DEV/
+/NRF_DK_TEST/
+/NRFDKCOAP/
 #sloppy credentials
 sloppy_credentials.*
