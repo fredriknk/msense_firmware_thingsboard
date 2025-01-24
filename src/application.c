@@ -36,6 +36,9 @@
 #include <zephyr/posix/poll.h>
 #include <nrf_modem_at.h>
 
+#include <zcbor_common.h>
+#include <zcbor_encode.h>
+
 #define IMEI_LEN 15
 
 LOG_MODULE_REGISTER(application, CONFIG_MULTI_SERVICE_LOG_LEVEL);
@@ -54,27 +57,134 @@ BUILD_ASSERT(CONFIG_AT_CMD_REQUEST_RESPONSE_BUFFER_LENGTH >= AT_CMD_REQUEST_ERR_
 #define TEMP_ALERT_HYSTERESIS 1.5
 #define TEMP_ALERT_LOWER_LIMIT (TEMP_ALERT_LIMIT - TEMP_ALERT_HYSTERESIS)
 
-#define MAX_BUFFER_SIZE 100  // Define a maximum buffer size based on available memory
-#define NUM_SAMPLES 4
+
 
 #define IMEI_LEN 15
 #define AT_RESP_LEN 64
 
 static char device_id_str[IMEI_LEN + 5]; // "nrf-" + 15 digits + null terminator
 
+#define MAX_BUFFER_SIZE 30  // Define a maximum buffer size based on available memory
+#define NUM_SAMPLES 4
+
 typedef struct {
-    char sensor_name[32];
-    double value;
+    char sensor_name[3];
+    float value;
     int64_t timestamp;
 } sensor_data_t;
 
 sensor_data_t sensor_buffer[MAX_BUFFER_SIZE];
 size_t buffer_index = 0;
 
-
 struct sockaddr_storage server = { 0 };
 struct coap_client coap_client = { 0 };
 int sock;
+
+#define ENCODED_BUFFER_SIZE    1024
+#define ZCBOR_ENCODER_STATE_COUNT 4
+uint8_t cbor_buffer[ENCODED_BUFFER_SIZE];
+size_t encoded_len = 0;
+
+/**
+ * @brief Encode an array of sensor_data_t into CBOR using zCBOR.
+ *
+ * @param sensor_data       Pointer to the sensor_data_t array
+ * @param data_count        Number of valid elements in the array
+ * @param cbor_out          Pointer to the buffer to store the resulting CBOR
+ * @param cbor_out_size     Size of the cbor_out buffer in bytes
+ * @param cbor_encoded_len  Output: how many bytes were written
+ *
+ * @return true if encoding succeeded, false otherwise
+ */
+bool encode_sensor_data_cbor(const sensor_data_t *sensor_data,
+                             size_t data_count,
+                             uint8_t *cbor_out,
+                             size_t cbor_out_size,
+                             size_t *cbor_encoded_len)
+{
+    /* Create an array of zcbor_state_t structures. */
+    zcbor_state_t zstate[ZCBOR_ENCODER_STATE_COUNT];
+
+    /* Initialize your zCBOR encoder.
+     * NOTE: The signature here is:
+     *   zcbor_new_state(state_array, n_states, payload, payload_len,
+     *                   elem_count, flags, flags_bytes)
+     * Make sure this order matches exactly your local zcbor library.
+     */
+    zcbor_new_state(zstate, ZCBOR_ENCODER_STATE_COUNT,
+                    cbor_out, cbor_out_size,
+                    0,        /* elem_count */
+                    NULL,     /* flags pointer */
+                    0);       /* flags_bytes */
+
+    LOG_DBG("encode_sensor_data_cbor: data_count=%zu, out_size=%zu",
+            data_count, cbor_out_size);
+
+    bool ret = true;
+
+    /* Encode the outer array (list) with `data_count` elements. */
+    ret &= zcbor_list_start_encode(zstate, data_count);
+    if (!ret) {
+        LOG_ERR("Failed to start outer list. Possibly out of buffer space?");
+        goto done;
+    }
+
+    for (size_t i = 0; i < data_count && ret; i++) {
+        LOG_DBG("Encoding item %zu: name='%.*s', value=%f, timestamp=%lld",
+                i,
+                (int)sizeof(sensor_data[i].sensor_name),
+                sensor_data[i].sensor_name,
+                (double)sensor_data[i].value,
+                (long long)sensor_data[i].timestamp);
+
+        /* Each struct is an array of 3 fields:
+         *   [ sensor_name, value, timestamp ]
+         */
+        ret &= zcbor_list_start_encode(zstate, 3);
+        if (!ret) { LOG_ERR("Failed list_start_encode(3) at idx=%zu", i); goto done; }
+
+        /* 1) Encode sensor_name (3 chars). */
+        ret &= zcbor_tstr_encode_ptr(zstate,
+                                     sensor_data[i].sensor_name,
+                                     sizeof(sensor_data[i].sensor_name));
+        if (!ret) { LOG_ERR("Failed tstr_encode_ptr at idx=%zu", i); goto done; }
+
+        /* 2) Encode float (32 bits). */
+        ret &= zcbor_float32_encode(zstate, &sensor_data[i].value);
+        if (!ret) { LOG_ERR("Failed float32_encode at idx=%zu", i); goto done; }
+
+        /* 3) Encode timestamp (int64). Must pass pointer for `_encode()` variant. */
+        ret &= zcbor_int64_encode(zstate, &sensor_data[i].timestamp);
+        if (!ret) { LOG_ERR("Failed int64_encode at idx=%zu", i); goto done; }
+
+        ret &= zcbor_list_end_encode(zstate, 3);
+        if (!ret) { LOG_ERR("Failed list_end_encode(3) at idx=%zu", i); goto done; }
+    }
+
+    /* Close the outer array. */
+    ret &= zcbor_list_end_encode(zstate, data_count);
+    if (!ret) {
+        LOG_ERR("Failed to close outer list of size=%zu", data_count);
+        goto done;
+    }
+
+done:
+    if (ret) {
+        /* If all encoding succeeded, compute how many bytes we wrote.
+         * This version of zcbor doesn't track `payload_bak`, so we do pointer math:
+         */
+        size_t used = (size_t)(zstate[0].payload - cbor_out);
+        *cbor_encoded_len = used;
+
+        LOG_DBG("encode_sensor_data_cbor: success, encoded_len=%zu", used);
+    } else {
+        *cbor_encoded_len = 0;
+        LOG_ERR("encode_sensor_data_cbor: failed somewhere!");
+    }
+
+    return ret;
+}
+
 
 void buffer_sensor_data(const char *sensor, double value) {
     if (buffer_index < MAX_BUFFER_SIZE) {
@@ -285,205 +395,37 @@ struct group {
  * [ { "ts": X, "values": { "ID1": val1, "ID2": val2, ... } }, ... ]
  * where all readings within 1 second of the earliest reading get grouped.
  */
-static cJSON *build_thingsboard_telemetry_array_one_second_group(const cJSON *original_array,
-                                                                 const char *device_id)
+
+int send_device_message_localcoap(void)
 {
-    if (!cJSON_IsArray(original_array)) {
-        LOG_ERR("Input is not a JSON array");
-        return NULL;
-    }
+    LOG_INF("Send bulk message LOCALCOAP");
 
-    int count = cJSON_GetArraySize(original_array);
-    if (count <= 0) {
-        LOG_WRN("Empty JSON array");
-        // Return an empty top-level object with just the device_id
-        cJSON *top_obj = cJSON_CreateObject();
-        cJSON_AddStringToObject(top_obj, "device_id", device_id);
-        cJSON_AddItemToObject(top_obj, "data", cJSON_CreateArray());
-        return top_obj;
-    }
-
-    /* Allocate array for the raw readings */
-    struct reading_item *items = k_calloc(count, sizeof(struct reading_item));
-    if (!items) {
-        LOG_ERR("Failed to allocate memory for reading items");
-        return NULL;
-    }
-
-    /* Extract items from JSON into the array */
-    int idx = 0;
-    cJSON *elem = NULL;
-    cJSON_ArrayForEach(elem, original_array) {
-        if (idx >= count) {
-            break;
-        }
-
-        cJSON *appId_obj = cJSON_GetObjectItem(elem, "appId");
-        cJSON *ts_obj    = cJSON_GetObjectItem(elem, "ts");
-        cJSON *data_obj  = cJSON_GetObjectItem(elem, "data");
-        if (cJSON_IsString(appId_obj) && cJSON_IsNumber(ts_obj) && cJSON_IsNumber(data_obj)) {
-            items[idx].appId = appId_obj->valuestring;
-            items[idx].ts    = (long long)ts_obj->valuedouble;
-            items[idx].data  = data_obj->valuedouble;
-            idx++;
-        }
-    }
-    int valid_count = idx;
-
-    // Sort the items by timestamp ascending
-    int cmp_func(const void *a, const void *b) {
-        const struct reading_item *ra = (const struct reading_item *)a;
-        const struct reading_item *rb = (const struct reading_item *)b;
-        if (ra->ts < rb->ts) return -1;
-        if (ra->ts > rb->ts) return  1;
-        return 0;
-    }
-    qsort(items, valid_count, sizeof(struct reading_item), cmp_func);
-
-    // Allocate groups (worst case: each reading is its own group)
-    struct group *groups = k_calloc(valid_count, sizeof(struct group));
-    if (!groups) {
-        LOG_ERR("Failed to allocate memory for groups");
-        k_free(items);
-        return NULL;
-    }
-
-    int group_index = 0;
-    if (valid_count > 0) {
-        // Start first group with the first reading
-        groups[0].earliest_ts = items[0].ts;
-        groups[0].values = cJSON_CreateObject();
-        cJSON_AddNumberToObject(groups[0].values, items[0].appId, items[0].data);
-        group_index = 1;
-    }
-
-    // Group subsequent readings
-    for (int i = 1; i < valid_count; i++) {
-        long long current_ts = items[i].ts;
-        struct group *last_grp = &groups[group_index - 1];
-
-        if ((current_ts - last_grp->earliest_ts) < 1000) {
-            // Same group
-            cJSON_AddNumberToObject(last_grp->values, items[i].appId, items[i].data);
-        } else {
-            // New group
-            groups[group_index].earliest_ts = current_ts;
-            groups[group_index].values = cJSON_CreateObject();
-            cJSON_AddNumberToObject(groups[group_index].values, items[i].appId, items[i].data);
-            group_index++;
-        }
-    }
-
-    // Build final JSON array of groups
-    cJSON *tb_array = cJSON_CreateArray();
-    if (!tb_array) {
-        LOG_ERR("Failed to create TB array JSON");
-        // Cleanup
-        for (int g = 0; g < group_index; g++) {
-            cJSON_Delete(groups[g].values);
-        }
-        k_free(groups);
-        k_free(items);
-        return NULL;
-    }
-
-    // Convert each group into { "ts": X, "values": {...} }
-    for (int g = 0; g < group_index; g++) {
-        cJSON *group_obj = cJSON_CreateObject();
-        if (!group_obj) {
-            LOG_ERR("Failed to create group object");
-            cJSON_Delete(tb_array);
-            // Cleanup
-            for (int h = 0; h < group_index; h++) {
-                cJSON_Delete(groups[h].values);
-            }
-            k_free(groups);
-            k_free(items);
-            return NULL;
-        }
-
-        cJSON_AddNumberToObject(group_obj, "ts", (double)groups[g].earliest_ts);
-        cJSON_AddItemToObject(group_obj, "values", groups[g].values);
-        cJSON_AddItemToArray(tb_array, group_obj);
-    }
-
-    // Cleanup intermediate data
-    k_free(groups);
-    k_free(items);
-
-    // ===== Now wrap tb_array in a top-level object with the device ID =====
-    cJSON *top_obj = cJSON_CreateObject();
-    if (!top_obj) {
-        LOG_ERR("Failed to create top-level JSON object");
-        cJSON_Delete(tb_array);
-        return NULL;
-    }
-
-    cJSON_AddStringToObject(top_obj, "device_id", device_id);
-    cJSON_AddItemToObject(top_obj, "data", tb_array);
-
-    return top_obj;
-}
-
-
-#define NRF_CLOUD_ENC_SRC_PRE_ENCODED 1
-
-static int encode_nrf_cloud_obj(struct nrf_cloud_obj *obj)
-{
-    if (!obj || obj->type != NRF_CLOUD_OBJ_TYPE_JSON || !obj->json) {
-        LOG_ERR("Invalid object or JSON");
+    /* Encode CBOR data. */
+    bool success = encode_sensor_data_cbor(sensor_buffer, buffer_index,
+                                           cbor_buffer, sizeof(cbor_buffer),
+                                           &encoded_len);
+    if (!success) {
+        LOG_ERR("Failed to encode sensor data");
         return -EINVAL;
     }
 
-    /* Convert + group readings into TB-friendly array */
-    cJSON *tb_array = build_thingsboard_telemetry_array_one_second_group(obj->json,device_id_str);
-    if (!tb_array) {
-        LOG_ERR("Failed to build TB telemetry array");
-        return -ENOMEM;
-    }
-
-    /* Print the new array as unformatted JSON */
-    char *json_str = cJSON_PrintUnformatted(tb_array);
-    cJSON_Delete(tb_array);  // free the cJSON structure
-
-    if (!json_str) {
-        LOG_ERR("Failed to stringify TB array");
-        return -ENOMEM;
-    }
-
-    /* Populate the encoded_data fields. Use k_malloc if you want Zephyr memory tracking. */
-    obj->encoded_data.ptr = json_str;
-    obj->encoded_data.len = strlen(json_str);
-    obj->enc_src = NRF_CLOUD_ENC_SRC_PRE_ENCODED;
-
-    LOG_INF("Encoded grouped TB JSON: %s", json_str);
-    return 0;
-}
-
-int send_device_message_localcoap(struct nrf_cloud_obj *const msg_obj)
-{
-    if (!msg_obj) {
-        return -EINVAL;
-    }
-
-    /* Ensure the object is encoded */
-    if (!msg_obj->encoded_data.ptr || msg_obj->encoded_data.len == 0) {
-        int err = encode_nrf_cloud_obj(msg_obj);
-        if (err) {
-            return err;
-        }
-    }
-
+    /* Because your struct has "size_t len;" (not a pointer), just assign the value. */
     struct coap_client_request req = {
         .method       = COAP_METHOD_POST,
         .confirmable  = true,
-        .fmt          = COAP_CONTENT_FORMAT_APP_JSON, // sending JSON
-        .payload      = (const uint8_t *)msg_obj->encoded_data.ptr,
-        .len          = msg_obj->encoded_data.len,
-        .cb           = response_cb, // your CoAP response callback
-        .path         = CONFIG_COAP_SAMPLE_RESOURCE, // "api/v1/<token>/telemetry"
+        .fmt          = COAP_CONTENT_FORMAT_APP_CBOR,
+        .payload      = cbor_buffer,
+        .len          = encoded_len,  // <- Use the value, not &encoded_len
+        .cb           = response_cb,
+        .path         = CONFIG_COAP_SAMPLE_RESOURCE,
+        /* .options     = ... if needed */
+        /* .num_options = ... if needed */
+        /* .user_data   = ... if needed */
     };
 
+    LOG_INF("Encoded message length: %zu", encoded_len);
+
+    /* Send the CoAP request. */
     int err = coap_client_req(&coap_client, sock,
                               (struct sockaddr *)&server, &req, NULL);
     if (err) {
@@ -491,61 +433,19 @@ int send_device_message_localcoap(struct nrf_cloud_obj *const msg_obj)
         return err;
     }
 
-    LOG_INF("CoAP POST sent. Payload: %s",
-            (char *)msg_obj->encoded_data.ptr);
-
-    return 0;
+    return 0;  // success
 }
 
 #if defined(CONFIG_JSON_DIY_COAP)
 void send_buffered_data() {
     int ret;
-    NRF_CLOUD_OBJ_JSON_DEFINE(bulk_obj);
-    NRF_CLOUD_OBJ_JSON_DEFINE(msg_obj);
-	LOG_INF("Initializing bulk message");
-    ret = nrf_cloud_obj_bulk_init(&bulk_obj);
-    if (ret) {
-        LOG_ERR("Failed to initialize bulk message: %d", ret);
-        return;
-    }
-
-    for (size_t i = 0; i < buffer_index; i++) {
-        ret = create_timestamped_device_message_with_ts(&msg_obj,
-                                                        sensor_buffer[i].sensor_name,
-                                                        NRF_CLOUD_JSON_MSG_TYPE_VAL_DATA,
-                                                        sensor_buffer[i].timestamp);
-        if (ret) {
-            LOG_ERR("Failed to create message object: %d", ret);
-            continue;
-        }
-
-        ret = nrf_cloud_obj_num_add(&msg_obj, NRF_CLOUD_JSON_DATA_KEY, sensor_buffer[i].value, false);
-		LOG_INF("Add obj to bulk send: %f", sensor_buffer[i].value);
-        if (ret) {
-            LOG_ERR("Failed to add data to message object: %d", ret);
-            nrf_cloud_obj_free(&msg_obj);
-            continue;
-        }
-
-        ret = nrf_cloud_obj_bulk_add(&bulk_obj, &msg_obj);
-        if (ret) {
-            LOG_ERR("Failed to add message to bulk object: %d", ret);
-            nrf_cloud_obj_free(&msg_obj);
-            continue;
-        }
-        nrf_cloud_obj_reset(&msg_obj);
-    }
-	LOG_INF("Send bulk message");
-    ret = send_device_message_localcoap(&bulk_obj);
+    ret = send_device_message_localcoap();
 	
     if (ret) {
         LOG_ERR("Failed to send bulk message: %d", ret);
     }
     // Clear the buffer
     buffer_index = 0;
-    
-
-    nrf_cloud_obj_free(&bulk_obj);
 }
 #endif
 
@@ -993,7 +893,7 @@ void main_application_thread_fn(void)
 
 		if (test_counter_enable_get()) {
 			LOG_INF("Sent test counter = %d", counter);
-            buffer_sensor_data("COUNT", counter++);
+            buffer_sensor_data("CNT", counter++);
         	
 		}
 
@@ -1005,14 +905,14 @@ void main_application_thread_fn(void)
 			double voltage = -1;
 
 			if (get_all_data(&temp, &humidity, &pressure, &gas)== 0) {
-				buffer_sensor_data("T", temp);
+				buffer_sensor_data("TEM", temp);
 				monitor_temperature(temp);
 				LOG_INF("Temperature is %f degrees C", temp);
-				buffer_sensor_data("O", gas);
+				buffer_sensor_data("OHM", gas);
 				LOG_INF("Gas Resistance is %d OHM", (int)gas);
-				buffer_sensor_data("P", pressure);
+				buffer_sensor_data("PRS", pressure);
 				LOG_INF("pressure is %f pascal", pressure);
-				buffer_sensor_data("H", humidity);
+				buffer_sensor_data("HUM", humidity);
 				LOG_INF("Humidity is %f %%", humidity);
 			}
 			else{
