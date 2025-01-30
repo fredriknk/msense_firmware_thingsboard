@@ -281,14 +281,13 @@
 							regulator-min-microvolt = < 0xf4240 >;
 							regulator-max-microvolt = < 0x325aa0 >;
 							regulator-initial-mode = < 0x3 >;
-							regulator-boot-on;
 						};
 					};
 					npm1300_ek_charger: charger {
 						compatible = "nordic,npm1300-charger";
-						term-microvolt = < 0x3567e0 >;
-						term-warm-microvolt = < 0x36ee80 >;
-						current-microamp = < 0x2f5d0 >;
+						term-microvolt = < 0x2793d60 >;
+						term-warm-microvolt = < 0x3d0900 >;
+						current-microamp = < 0x7a120 >;
 						dischg-limit-microamp = < 0x147260 >;
 						vbus-limit-microamp = < 0x7a120 >;
 						thermistor-ohms = < 0x2710 >;

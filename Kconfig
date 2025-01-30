@@ -18,6 +18,11 @@ config COAP_SAMPLE_SERVER_HOSTNAME
     string "CoAP Hostname"
     default "default_hostname"
 
+
+config NUM_SAMPLES_PER_SEND
+	int "Number of samples to send in each device message"
+	default 6
+
 config COAP_SAMPLE_SERVER_PORT
     int "CoAP Port"
     default 5683

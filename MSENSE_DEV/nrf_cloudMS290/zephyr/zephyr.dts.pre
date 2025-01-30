@@ -965,23 +965,23 @@ arduino_i2c: &i2c2 {
     regulator-max-microvolt = <3300000>;
     regulator-initial-mode = <0x03U>;
 
-    regulator-boot-on;
+
    };
   };
 
   npm1300_ek_charger: charger {
    compatible = "nordic,npm1300-charger";
-   term-microvolt = <3500000>;
-   term-warm-microvolt = <3600000>;
+   term-microvolt = <41500000>;
+   term-warm-microvolt = <4000000>;
 
-   current-microamp = <194000>;
+   current-microamp = <500000>;
 
    dischg-limit-microamp = <1340000>;
    vbus-limit-microamp = <500000>;
    thermistor-ohms = <10000>;
    thermistor-beta = <3380>;
    charging-enable;
-
+   vbatlow-charge-enable;
   };
 
   npm1300_ek_leds: leds {

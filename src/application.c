@@ -64,12 +64,14 @@ BUILD_ASSERT(CONFIG_AT_CMD_REQUEST_RESPONSE_BUFFER_LENGTH >= AT_CMD_REQUEST_ERR_
 
 static char device_id_str[IMEI_LEN + 5]; // "nrf-" + 15 digits + null terminator
 
-#define MAX_BUFFER_SIZE 30  // Define a maximum buffer size based on available memory
-#define NUM_SAMPLES 4
+#define MAX_BUFFER_SIZE 35  // Define a maximum buffer size based on available memory
 
 typedef struct {
-    char sensor_name[3];
-    float value;
+    char sensor_name[4];
+    float value1;
+	float value2;
+	float value3;
+	float value4;
     int64_t timestamp;
 } sensor_data_t;
 
@@ -123,18 +125,31 @@ bool encode_sensor_data_cbor(const sensor_data_t *sensor_data,
     bool ret = true;
 
     /* Encode the outer array (list) with `data_count` elements. */
-    ret &= zcbor_list_start_encode(zstate, data_count);
+    ret &= zcbor_list_start_encode(zstate, data_count+1);
     if (!ret) {
         LOG_ERR("Failed to start outer list. Possibly out of buffer space?");
         goto done;
     }
+	char name[4]="NAME";
+	//Start with the device ID
+	ret &= zcbor_list_start_encode(zstate, 3);
+	if (!ret) { LOG_ERR("Failed list_start_encode(3) at insert name"); goto done; }
+
+	ret &= zcbor_tstr_encode_ptr(zstate, name, sizeof(name));
+	ret &= zcbor_tstr_encode_ptr(zstate, device_id_str, sizeof(device_id_str));
+	
+	ret &= zcbor_list_end_encode(zstate, 3);
+	if (!ret) { LOG_ERR("Failed list_start_encode(3) at insert name"); goto done; }
 
     for (size_t i = 0; i < data_count && ret; i++) {
-        LOG_DBG("Encoding item %zu: name='%.*s', value=%f, timestamp=%lld",
+        LOG_DBG("Encoding item %zu: name='%.*s', value1=%f,value2=%f,value3=%f,value4=%f, timestamp=%lld",
                 i,
                 (int)sizeof(sensor_data[i].sensor_name),
                 sensor_data[i].sensor_name,
-                (double)sensor_data[i].value,
+                (double)sensor_data[i].value1,
+				(double)sensor_data[i].value2,
+				(double)sensor_data[i].value3,
+				(double)sensor_data[i].value4,
                 (long long)sensor_data[i].timestamp);
 
         /* Each struct is an array of 3 fields:
@@ -150,7 +165,19 @@ bool encode_sensor_data_cbor(const sensor_data_t *sensor_data,
         if (!ret) { LOG_ERR("Failed tstr_encode_ptr at idx=%zu", i); goto done; }
 
         /* 2) Encode float (32 bits). */
-        ret &= zcbor_float32_encode(zstate, &sensor_data[i].value);
+        ret &= zcbor_float32_encode(zstate, &sensor_data[i].value1);
+        if (!ret) { LOG_ERR("Failed float32_encode at idx=%zu", i); goto done; }
+
+		/* 2) Encode float (32 bits). */
+        ret &= zcbor_float32_encode(zstate, &sensor_data[i].value2);
+        if (!ret) { LOG_ERR("Failed float32_encode at idx=%zu", i); goto done; }
+
+		/* 2) Encode float (32 bits). */
+        ret &= zcbor_float32_encode(zstate, &sensor_data[i].value3);
+        if (!ret) { LOG_ERR("Failed float32_encode at idx=%zu", i); goto done; }
+
+		/* 2) Encode float (32 bits). */
+        ret &= zcbor_float32_encode(zstate, &sensor_data[i].value4);
         if (!ret) { LOG_ERR("Failed float32_encode at idx=%zu", i); goto done; }
 
         /* 3) Encode timestamp (int64). Must pass pointer for `_encode()` variant. */
@@ -186,7 +213,7 @@ done:
 }
 
 
-void buffer_sensor_data(const char *sensor, double value) {
+void buffer_sensor_data(const char *sensor, double value1,double value2,double value3,double value4) {
     if (buffer_index < MAX_BUFFER_SIZE) {
         int err;
         int64_t timestamp;
@@ -200,7 +227,10 @@ void buffer_sensor_data(const char *sensor, double value) {
 
         // Store sensor data and timestamp in buffer
         strncpy(sensor_buffer[buffer_index].sensor_name, sensor, sizeof(sensor_buffer[buffer_index].sensor_name));
-        sensor_buffer[buffer_index].value = value;
+        sensor_buffer[buffer_index].value1 = value1;
+		sensor_buffer[buffer_index].value2 = value2;
+		sensor_buffer[buffer_index].value3 = value3;
+		sensor_buffer[buffer_index].value4 = value4;
         sensor_buffer[buffer_index].timestamp = timestamp;
         buffer_index++;
     } else {
@@ -609,10 +639,7 @@ static void on_location_update(const struct location_event_data * const location
 		(double)location_data->location.accuracy,
 		location_method_str(location_data->method));
 
-	buffer_sensor_data("LAT", location_data->location.latitude);
-	buffer_sensor_data("LON", location_data->location.longitude);
-	buffer_sensor_data("ACC", location_data->location.accuracy);
-	buffer_sensor_data("MET", location_data->method);
+	buffer_sensor_data("LOAM", location_data->location.latitude,location_data->location.longitude,location_data->location.accuracy,location_data->method);
 
 	/* If the position update was derived using GNSS, send it onward to nRF Cloud. */
 	if (location_data->method == LOCATION_METHOD_GNSS) {
@@ -805,7 +832,7 @@ int fetch_device_id(void)
     imei_buf[IMEI_LEN] = '\0'; // null-terminate
 
     /* If you want a prefix like "nrf-", prepend it: */
-    snprintf(device_id_str, sizeof(device_id_str), "nrf-%s", imei_buf);
+    snprintf(device_id_str, sizeof(device_id_str), "%s%s",CONFIG_NRF_CLOUD_CLIENT_ID_PREFIX, imei_buf);
 
     LOG_INF("DEVICEID: %s", device_id_str);
     return 0;
@@ -893,7 +920,7 @@ void main_application_thread_fn(void)
 
 		if (test_counter_enable_get()) {
 			LOG_INF("Sent test counter = %d", counter);
-            buffer_sensor_data("CNT", counter++);
+            //buffer_sensor_data("CNT", counter++);
         	
 		}
 
@@ -903,26 +930,28 @@ void main_application_thread_fn(void)
 			double humidity = -1;
 			double pressure = -1;
 			double voltage = -1;
+			double current= -1;
+			double tempCharger= -1;
+			double chargestat= -1;
 
 			if (get_all_data(&temp, &humidity, &pressure, &gas)== 0) {
-				buffer_sensor_data("TEM", temp);
-				monitor_temperature(temp);
 				LOG_INF("Temperature is %f degrees C", temp);
-				buffer_sensor_data("OHM", gas);
 				LOG_INF("Gas Resistance is %d OHM", (int)gas);
-				buffer_sensor_data("PRS", pressure);
 				LOG_INF("pressure is %f pascal", pressure);
-				buffer_sensor_data("HUM", humidity);
 				LOG_INF("Humidity is %f %%", humidity);
+				buffer_sensor_data("THPG", temp,humidity,pressure,gas);
 			}
 			else{
 				LOG_ERR("Failed to get sensor data");
 			}
             
-			if (++sendcounter > NUM_SAMPLES) {
-				if(get_voltage(&voltage) == 0){
-					buffer_sensor_data("VBT", voltage);
+			if (++sendcounter > CONFIG_NUM_SAMPLES_PER_SEND) {
+				if(get_charger(&voltage,&current,&tempCharger,&chargestat) == 0){
+					buffer_sensor_data("VCtS", voltage,current,temp,chargestat);
 					LOG_INF("Voltage is %f V", voltage);
+					LOG_INF("Current is %f A", current);
+					LOG_INF("Temperature is %f degrees C", tempCharger);
+					LOG_INF("Charging status is %d", chargestat);
 				}
 				else{
 					LOG_ERR("Failed to get voltage data");
