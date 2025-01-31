@@ -62,7 +62,7 @@ BUILD_ASSERT(CONFIG_AT_CMD_REQUEST_RESPONSE_BUFFER_LENGTH >= AT_CMD_REQUEST_ERR_
 #define IMEI_LEN 15
 #define AT_RESP_LEN 64
 
-static char device_id_str[IMEI_LEN + 5]; // "nrf-" + 15 digits + null terminator
+static char device_id_str[IMEI_LEN + sizeof(CONFIG_NRF_CLOUD_CLIENT_ID_PREFIX)]; // "nrf-" + 15 digits + null terminator
 
 #define MAX_BUFFER_SIZE 35  // Define a maximum buffer size based on available memory
 
@@ -838,6 +838,12 @@ int fetch_device_id(void)
     return 0;
 }
 
+static double temp_sum = 0;
+static double humidity_sum = 0;
+static double pressure_sum = 0;
+static double gas_sum = 0;
+static int samples_collected = 0;
+
 void main_application_thread_fn(void)
 {
 	print_reset_reason();
@@ -935,17 +941,48 @@ void main_application_thread_fn(void)
 			double chargestat= -1;
 
 			if (get_all_data(&temp, &humidity, &pressure, &gas)== 0) {
+				/* Accumulate the readings */
+				temp_sum += temp;
+				humidity_sum += humidity;
+				pressure_sum += pressure;
+				gas_sum += gas;
+				samples_collected++;
+
 				LOG_INF("Temperature is %f degrees C", temp);
 				LOG_INF("Gas Resistance is %d OHM", (int)gas);
 				LOG_INF("pressure is %f pascal", pressure);
 				LOG_INF("Humidity is %f %%", humidity);
-				buffer_sensor_data("THPG", temp,humidity,pressure,gas);
+				LOG_INF("Samples collected: %d", samples_collected);
+
+				/* Once we have enough samples, compute the average and buffer it */
+				if (samples_collected >= CONFIG_NUM_SAMPLES_AVERAGED) {
+					double avg_temp = temp_sum / samples_collected;
+					double avg_humidity = humidity_sum / samples_collected;
+					double avg_pressure = pressure_sum / samples_collected;
+					double avg_gas = gas_sum / samples_collected;
+
+					LOG_INF("Averaged Temperature: %f degC", avg_temp);
+					LOG_INF("Averaged Humidity: %f %%",     avg_humidity);
+					LOG_INF("Averaged Pressure: %f Pa",     avg_pressure);
+					LOG_INF("Averaged Gas: %d OHM",         (int)avg_gas);
+
+					/* Buffer the averaged data (instead of the single-sample data) */
+					buffer_sensor_data("THPG", avg_temp, avg_humidity, avg_pressure, avg_gas);
+
+					/* Reset accumulators and counter */
+					temp_sum = 0;
+					humidity_sum = 0;
+					pressure_sum = 0;
+					gas_sum = 0;
+					samples_collected = 0;
+					sendcounter++;
+				}
 			}
 			else{
 				LOG_ERR("Failed to get sensor data");
 			}
             
-			if (++sendcounter > CONFIG_NUM_SAMPLES_PER_SEND) {
+			if (sendcounter > CONFIG_NUM_SAMPLES_PER_SEND) {
 				if(get_charger(&voltage,&current,&tempCharger,&chargestat) == 0){
 					buffer_sensor_data("VCtS", voltage,current,temp,chargestat);
 					LOG_INF("Voltage is %f V", voltage);

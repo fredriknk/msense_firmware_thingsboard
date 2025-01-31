@@ -1,6 +1,0 @@
-osource "C:/Users/fnk/Documents/GITHUB/nrfboards/boards/shields/*/Kconfig.defconfig"
-osource "C:/ncs/workspace_1/asset_tracker_v2_devkit/boards/shields/*/Kconfig.defconfig"
-osource "C:/ncs/workspace_1/nrf_cloudMS290/boards/shields/*/Kconfig.defconfig"
-osource "C:/ncs/workspace_1/aws_iot_2/boards/shields/*/Kconfig.defconfig"
-osource "C:/ncs/workspace_1/coap_client_1/boards/shields/*/Kconfig.defconfig"
-osource "C:/ncs/v2.9.0/nrf/boards/shields/*/Kconfig.defconfig"

@@ -18,6 +18,9 @@ config COAP_SAMPLE_SERVER_HOSTNAME
     string "CoAP Hostname"
     default "default_hostname"
 
+config NUM_SAMPLES_AVERAGED
+	int "Number of samples to average before sending"
+	default 4
 
 config NUM_SAMPLES_PER_SEND
 	int "Number of samples to send in each device message"
