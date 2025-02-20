@@ -132,13 +132,13 @@ bool encode_sensor_data_cbor(const sensor_data_t *sensor_data,
     }
 	char name[4]="NAME";
 	//Start with the device ID
-	ret &= zcbor_list_start_encode(zstate, 3);
+	ret &= zcbor_list_start_encode(zstate, 2);
 	if (!ret) { LOG_ERR("Failed list_start_encode(3) at insert name"); goto done; }
 
 	ret &= zcbor_tstr_encode_ptr(zstate, name, sizeof(name));
 	ret &= zcbor_tstr_encode_ptr(zstate, device_id_str, sizeof(device_id_str));
 	
-	ret &= zcbor_list_end_encode(zstate, 3);
+	ret &= zcbor_list_end_encode(zstate, 2);
 	if (!ret) { LOG_ERR("Failed list_start_encode(3) at insert name"); goto done; }
 
     for (size_t i = 0; i < data_count && ret; i++) {
@@ -155,7 +155,7 @@ bool encode_sensor_data_cbor(const sensor_data_t *sensor_data,
         /* Each struct is an array of 3 fields:
          *   [ sensor_name, value, timestamp ]
          */
-        ret &= zcbor_list_start_encode(zstate, 3);
+        ret &= zcbor_list_start_encode(zstate, 6);
         if (!ret) { LOG_ERR("Failed list_start_encode(3) at idx=%zu", i); goto done; }
 
         /* 1) Encode sensor_name (3 chars). */
@@ -184,12 +184,12 @@ bool encode_sensor_data_cbor(const sensor_data_t *sensor_data,
         ret &= zcbor_int64_encode(zstate, &sensor_data[i].timestamp);
         if (!ret) { LOG_ERR("Failed int64_encode at idx=%zu", i); goto done; }
 
-        ret &= zcbor_list_end_encode(zstate, 3);
+        ret &= zcbor_list_end_encode(zstate, 6);
         if (!ret) { LOG_ERR("Failed list_end_encode(3) at idx=%zu", i); goto done; }
     }
 
     /* Close the outer array. */
-    ret &= zcbor_list_end_encode(zstate, data_count);
+    ret &= zcbor_list_end_encode(zstate, data_count+1);
     if (!ret) {
         LOG_ERR("Failed to close outer list of size=%zu", data_count);
         goto done;
@@ -460,6 +460,12 @@ int send_device_message_localcoap(void)
                               (struct sockaddr *)&server, &req, NULL);
     if (err) {
         LOG_ERR("Failed to send POST: %d", err);
+		err = server_resolve(&server);
+		if (err) {
+			LOG_ERR("Failed to resolve server name");
+		}
+		err = coap_client_req(&coap_client, sock,
+			(struct sockaddr *)&server, &req, NULL);
         return err;
     }
 
@@ -475,7 +481,6 @@ void send_buffered_data() {
         LOG_ERR("Failed to send bulk message: %d", ret);
     }
     // Clear the buffer
-    buffer_index = 0;
 }
 #endif
 
@@ -912,7 +917,7 @@ void main_application_thread_fn(void)
     }
     fetch_device_id();
 	int counter = 0;
-	int sendcounter = 3;
+	int sendcounter = 0;
 	/* Begin sampling sensors. */
 	while (true) {
 		/* Start the sensor sample interval timer.
@@ -948,12 +953,12 @@ void main_application_thread_fn(void)
 				gas_sum += gas;
 				samples_collected++;
 
-				LOG_INF("Temperature is %f degrees C", temp);
-				LOG_INF("Gas Resistance is %d OHM", (int)gas);
-				LOG_INF("pressure is %f pascal", pressure);
-				LOG_INF("Humidity is %f %%", humidity);
-				LOG_INF("Samples collected: %d", samples_collected);
-
+				LOG_DBG("Temperature is %f degrees C", temp);
+				LOG_DBG("Gas Resistance is %d OHM", (int)gas);
+				LOG_DBG("pressure is %f pascal", pressure);
+				LOG_DBG("Humidity is %f %%", humidity);
+				LOG_DBG("Samples collected: %d", samples_collected);
+				//Log that we took a reading, idx no
 				/* Once we have enough samples, compute the average and buffer it */
 				if (samples_collected >= CONFIG_NUM_SAMPLES_AVERAGED) {
 					double avg_temp = temp_sum / samples_collected;
@@ -961,14 +966,14 @@ void main_application_thread_fn(void)
 					double avg_pressure = pressure_sum / samples_collected;
 					double avg_gas = gas_sum / samples_collected;
 
-					LOG_INF("Averaged Temperature: %f degC", avg_temp);
-					LOG_INF("Averaged Humidity: %f %%",     avg_humidity);
-					LOG_INF("Averaged Pressure: %f Pa",     avg_pressure);
-					LOG_INF("Averaged Gas: %d OHM",         (int)avg_gas);
+					LOG_DBG("Averaged Temperature: %f degC", avg_temp);
+					LOG_DBG("Averaged Humidity: %f %%",     avg_humidity);
+					LOG_DBG("Averaged Pressure: %f Pa",     avg_pressure);
+					LOG_DBG("Averaged Gas: %d OHM",         (int)avg_gas);
 
 					/* Buffer the averaged data (instead of the single-sample data) */
 					buffer_sensor_data("THPG", avg_temp, avg_humidity, avg_pressure, avg_gas);
-
+					LOG_INF("Reading %d", sendcounter);
 					/* Reset accumulators and counter */
 					temp_sum = 0;
 					humidity_sum = 0;
@@ -996,6 +1001,7 @@ void main_application_thread_fn(void)
 
 				LOG_INF("Sending data %d datapoints", (int)buffer_index);
             	send_buffered_data();
+				buffer_index = 0;
 				sendcounter = 0;
 			}
 
